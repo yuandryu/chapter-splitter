@@ -1,1 +1,3 @@
-ÎÈuž‹.râ•ê+v*ÞrÚ+ÊÊÜþf¢ž;
+const { runSplit, USAGE } = require('./split');
+try { runSplit(process.argv.slice(2)); }
+catch (error) { console.error(`é”™è¯¯ï¼š${error.message}`); console.error(USAGE); process.exit(1); }

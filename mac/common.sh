@@ -1,1 +1,26 @@
-ÎÈu‹.râ•ê+v*ŞrÚ+ÊfœıÊ&š‰ì
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR=${0:A:h}
+CONFIG_FILE="$SCRIPT_DIR/config.sh"
+[[ -f "$CONFIG_FILE" ]] || { print -u2 "ç¼ºå°‘ $CONFIG_FILEï¼›è¯·å…ˆä» config.example.sh åˆ›å»ºé…ç½®æ–‡ä»¶ã€‚"; exit 2; }
+source "$CONFIG_FILE"
+
+[[ -n "${SPLITTER_DIR:-}" && -n "${QUEUE_ROOT:-}" && -n "${NODE_BIN:-}" && -x "$NODE_BIN" ]] || { print -u2 'config.sh é…ç½®æ— æ•ˆ'; exit 2; }
+[[ -f "$SPLITTER_DIR/bin/chapter-split" ]] || { print -u2 "æ‰¾ä¸åˆ° chapter-splitï¼š$SPLITTER_DIR"; exit 2; }
+
+INBOX_DIR="$QUEUE_ROOT/inbox"
+JOBS_DIR="$QUEUE_ROOT/jobs"
+OUTPUT_DIR="$QUEUE_ROOT/output"
+
+valid_job_id() { [[ "$1" =~ '^[A-Za-z0-9_-]{12,80}$' ]]; }
+status_file() { print -r -- "$JOBS_DIR/$1.json"; }
+write_status() { "$NODE_BIN" "$SCRIPT_DIR/write-status.js" "$(status_file "$1")" "$2" "$3" "${4:-}"; }
+
+find_input() {
+  local job_id="$1" input
+  for input in "$INBOX_DIR/$job_id.pdf" "$INBOX_DIR/$job_id.epub"; do
+    [[ -f "$input" ]] && { print -r -- "$input"; return 0; }
+  done
+  return 1
+}

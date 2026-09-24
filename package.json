@@ -1,1 +1,9 @@
-ÎÈuž‹.râ•ê+v*ÞrÚ+Ê–œ‘¨ŽÊ'
+{
+  "name": "chapter-splitter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Split PDF and EPUB files into verified chapter files",
+  "bin": { "chapter-split": "bin/chapter-split" },
+  "scripts": { "test": "node --test test/*.test.js" },
+  "engines": { "node": ">=18" }
+}

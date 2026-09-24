@@ -1,1 +1,13 @@
-ÎÈuž‹.râ•ê+v*ÞrÚ+Ê·§uêòji
+services:
+  - type: web
+    name: chapter-splitter-api
+    runtime: python
+    rootDir: cloud
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    plan: free
+    envVars:
+      - key: API_TOKEN
+        sync: false
+      - key: MAX_UPLOAD_BYTES
+        value: "104857600"
