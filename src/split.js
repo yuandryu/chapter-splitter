@@ -5,7 +5,7 @@ const { spawnSync } = require('child_process');
 
 const USAGE = `
 用法：
-  chapter-split <PDF|EPUB> --out <输出目录> [--level <书签层级>]
+  chapter-split <PDF|EPUB> --out <输出目录> [--level <书签层级>] [--job-id <本地任务ID>]
 
 PDF 优先按内置书签切分；没有书签时识别可提取正文中的“第 X 章 / Chapter X / Part X”。
 EPUB 优先按 nav.xhtml 或 toc.ncx 切分；没有导航时按 OPF spine 中的内容文件切分。
@@ -27,8 +27,9 @@ function safeName(value) { return (value || 'Untitled chapter').replace(/[\\/:*?
 function decodeXml(value) { return value.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim(); }
 function attributes(fragment) { return Object.fromEntries([...fragment.matchAll(/([\w:-]+)\s*=\s*(["'])(.*?)\2/g)].map(([, key, , value]) => [key, value])); }
 function normalized(base, href) { return posix.normalize(posix.join(posix.dirname(base), href.split('#')[0])).replace(/^\.\//, ''); }
-function splitPdf(input, output, level) {
-  const chapters = JSON.parse(run('swift', [join(__dirname, 'pdf-split.swift'), input, output, String(level)]));
+function chapterFilename(index, title, extension, jobId) { return `${String(index + 1).padStart(3, '0')}-${jobId ? `${safeName(jobId)}-` : ''}${safeName(title)}.${extension}`; }
+function splitPdf(input, output, level, jobId) {
+  const chapters = JSON.parse(run('swift', [join(__dirname, 'pdf-split.swift'), input, output, String(level), jobId || '']));
   writeFileSync(join(output, 'chapters.json'), JSON.stringify({ format: 'pdf', input, chapters }, null, 2) + '\n');
   return chapters.length;
 }
@@ -46,7 +47,7 @@ function epubNavigation(root, opfPath, opf, manifest, spine) {
   const spineIndex = new Map(spine.map((id, index) => [id, index]));
   return entries.map(entry => ({ ...entry, id: byPath.get(entry.path) })).filter(entry => spineIndex.has(entry.id)).map(entry => ({ ...entry, index: spineIndex.get(entry.id) }));
 }
-function splitEpub(input, output) {
+function splitEpub(input, output, jobId) {
   const stage = mkdtempSync(join(tmpdir(), 'chapter-split-'));
   try {
     run('unzip', ['-qq', input, '-d', stage]);
@@ -66,7 +67,7 @@ function splitEpub(input, output) {
       const start = starts[index], end = index + 1 < starts.length ? starts[index + 1].index : spine.length, selected = spine.slice(start.index, end);
       if (!selected.length) continue;
       writeFileSync(opfFile, opf.replace(/(<spine\b[^>]*>)[\s\S]*?(<\/spine>)/i, `$1\n${selected.map(id => `    <itemref idref="${id}"/>`).join('\n')}\n  $2`));
-      const filename = `${String(index + 1).padStart(3, '0')}-${safeName(start.title)}.epub`, target = resolve(output, filename);
+      const filename = chapterFilename(index, start.title, 'epub', jobId), target = resolve(output, filename);
       if (existsSync(join(stage, 'mimetype'))) run('zip', ['-X', '-q', '-0', target, 'mimetype'], { cwd: stage });
       run('zip', ['-X', '-q', '-r', target, '.', '-x', 'mimetype'], { cwd: stage });
       chapters.push({ title: start.title, start_spine_index: start.index + 1, end_spine_index: end, source: navigation.length ? 'navigation' : 'spine', confidence: navigation.length ? 'high' : 'medium', file: filename });
@@ -79,13 +80,14 @@ function splitEpub(input, output) {
 function runSplit(args) {
   if (!args.length || args[0] === '--help' || args[0] === '-h') { console.log(USAGE); return; }
   const inputArg = args.shift(); if (inputArg.startsWith('--')) die('需要一个 PDF 或 EPUB 路径');
-  const output = resolve(takeOption(args, '--out', true)), level = Number(takeOption(args, '--level') || '1');
+  const output = resolve(takeOption(args, '--out', true)), level = Number(takeOption(args, '--level') || '1'), jobId = takeOption(args, '--job-id');
   if (!Number.isInteger(level) || level < 1) die('--level 必须是正整数');
+  if (jobId && !/^[A-Za-z0-9_-]{12,80}$/.test(jobId)) die('--job-id 无效');
   if (args.length) die(`无法识别的参数：${args.join(' ')}`);
   const input = resolve(inputArg); if (!existsSync(input)) die(`找不到输入文件：${input}`);
   if (existsSync(output) && readdirSync(output).length) die(`输出目录必须为空：${output}`); mkdirSync(output, { recursive: true });
   const extension = extname(input).toLowerCase();
-  const count = extension === '.pdf' ? splitPdf(input, output, level) : extension === '.epub' ? splitEpub(input, output) : die('只接受 .pdf 或 .epub 文件');
+  const count = extension === '.pdf' ? splitPdf(input, output, level, jobId) : extension === '.epub' ? splitEpub(input, output, jobId) : die('只接受 .pdf 或 .epub 文件');
   console.log(`已输出 ${count} 个章节到：${output}`); console.log(`请先复核：${join(output, 'chapters.json')}`);
 }
 module.exports = { runSplit, USAGE };
