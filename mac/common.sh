@@ -11,15 +11,15 @@ source "$CONFIG_FILE"
 
 INBOX_DIR="$QUEUE_ROOT/inbox"
 JOBS_DIR="$QUEUE_ROOT/jobs"
-OUTPUT_DIR="$QUEUE_ROOT/output"
+RESULTS_DIR="$QUEUE_ROOT/results"
 
 valid_job_id() { [[ "$1" =~ '^[A-Za-z0-9_-]{12,80}$' ]]; }
 status_file() { print -r -- "$JOBS_DIR/$1.json"; }
-write_status() { "$NODE_BIN" "$SCRIPT_DIR/write-status.js" "$(status_file "$1")" "$2" "$3" "${4:-}"; }
+write_status() { "$NODE_BIN" "$SCRIPT_DIR/write-status.js" "$(status_file "$1")" "$1" "$2" "$3" "${4:-}"; }
 
 find_input() {
   local job_id="$1" input
-  for input in "$INBOX_DIR/$job_id.pdf" "$INBOX_DIR/$job_id.epub"; do
+  for input in "$INBOX_DIR"/"$job_id"-*.pdf "$INBOX_DIR"/"$job_id"-*.epub; do
     [[ -f "$input" ]] && { print -r -- "$input"; return 0; }
   done
   return 1
