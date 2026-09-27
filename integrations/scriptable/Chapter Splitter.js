@@ -1,10 +1,6 @@
-// Scriptable: create jobs and query their state for the Chapter Splitter shortcut.
-// Create a File Bookmark named "chapter-splitter-queue" for the queue root first.
-
-const BOOKMARK = 'chapter-splitter-queue'
-// Set these before installing the script in Scriptable.
-// The API should expose POST/GET /api/jobs as documented in SHORTCUTS.md.
-const WEB_API_BASE = 'https://YOUR-RENDER-SERVICE.onrender.com/api'
+// Scriptable: Chapter Splitter 的 iCloud 任务总账。
+// iCloud Drive/Scriptable/Chapter Splitter 下的 inbox、jobs、results 都使用 localJobId 命名。
+const WEB_API_BASE = 'https://chapter-splitter-api.onrender.com/api'
 const WEB_API_TOKEN = ''
 const allowedExtensions = new Set(['pdf', 'epub'])
 
@@ -18,9 +14,55 @@ function input() {
 }
 function validJobId(value) { return typeof value === 'string' && /^[A-Za-z0-9_-]{12,80}$/.test(value) }
 function newJobId() { return `job-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}` }
-function output(value) { Script.setShortcutOutput(JSON.stringify(value)); Script.complete() }
+function output(value) { Script.setShortcutOutput(value); Script.complete() }
 function apiUrl(path) { return `${WEB_API_BASE.replace(/\/$/, '')}${path}` }
 function apiHeaders() { return WEB_API_TOKEN ? { Authorization: `Bearer ${WEB_API_TOKEN}` } : {} }
+function extensionOf(value) { return String(value || '').toLowerCase().replace(/^\./, '') }
+function safeFileName(value) { return String(value || '').replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 120) }
+function sourceFileName(localJobId, originalName, extension) {
+  let name = safeFileName(originalName)
+  if (!name) name = `book.${extension}`
+  if (!name.toLowerCase().endsWith(`.${extension}`)) name = `${name}.${extension}`
+  return `${localJobId}-${name}`
+}
+function resultFileName(localJobId, originalName) {
+  const source = safeFileName(originalName) || 'book'
+  const stem = source.replace(/\.[^.]+$/, '') || 'book'
+  return `${localJobId}-${stem}-chapters.zip`
+}
+function ensureDirectories(fm, ...paths) { for (const path of paths) fm.createDirectory(path, true) }
+function jobFile(fm, jobs, localJobId) { return fm.joinPath(jobs, `${localJobId}.json`) }
+function inputFile(fm, inbox, localJobId, job, extension) {
+  const stored = job.source && job.source.storedFile
+  if (typeof stored === 'string' && stored.startsWith('inbox/')) return fm.joinPath(inbox, stored.slice('inbox/'.length))
+  const prefix = `${localJobId}-`
+  const match = fm.listContents(inbox).find(name => name.startsWith(prefix) && name.toLowerCase().endsWith(`.${extension}`))
+  return fm.joinPath(inbox, match || `${localJobId}.${extension}`) // 兼容旧任务。
+}
+async function readJob(fm, jobs, localJobId) {
+  const file = jobFile(fm, jobs, localJobId)
+  if (!fm.fileExists(file)) return { localJobId }
+  await fm.downloadFileFromiCloud(file)
+  try { return { localJobId, ...JSON.parse(fm.readString(file)) } } catch (_) { fail(`任务记录损坏：${localJobId}`) }
+}
+function writeJob(fm, jobs, localJobId, patch) {
+  const file = jobFile(fm, jobs, localJobId)
+  let current = { localJobId }
+  if (fm.fileExists(file)) {
+    try { current = { localJobId, ...JSON.parse(fm.readString(file)) } } catch (_) { fail(`任务记录损坏：${localJobId}`) }
+  }
+  const next = {
+    ...current,
+    ...patch,
+    localJobId,
+    source: { ...(current.source || {}), ...(patch.source || {}) },
+    web: { ...(current.web || {}), ...(patch.web || {}) },
+    mac: { ...(current.mac || {}), ...(patch.mac || {}) },
+    updatedAt: new Date().toISOString()
+  }
+  fm.writeString(file, JSON.stringify(next, null, 2))
+  return next
+}
 async function apiJSON(request) {
   try {
     const text = await request.loadString()
@@ -39,63 +81,126 @@ async function apiJSON(request) {
 async function main() {
   const request = input()
   const fm = FileManager.iCloud()
-  if (!fm.bookmarkExists(BOOKMARK)) fail(`请先在快捷指令中创建名为“${BOOKMARK}”的 File Bookmark。`)
-  const root = fm.bookmarkedPath(BOOKMARK)
+  const root = fm.joinPath(fm.documentsDirectory(), 'Chapter Splitter')
   const inbox = fm.joinPath(root, 'inbox')
   const jobs = fm.joinPath(root, 'jobs')
+  const results = fm.joinPath(root, 'results')
   const action = request.action || 'new-job'
+  ensureDirectories(fm, inbox, jobs, results)
 
-  if (action === 'new-job') return output({ jobId: newJobId() })
-  if (!validJobId(request.jobId)) fail('任务 ID 无效。')
+  if (action === 'new-job') {
+    const localJobId = newJobId()
+    const extension = extensionOf(request.extension)
+    if (extension && !allowedExtensions.has(extension)) fail('只支持 PDF 或 EPUB。')
+    writeJob(fm, jobs, localJobId, {
+      state: 'created', message: '任务已创建，等待保存原文件。',
+      source: { extension: extension || null, originalName: String(request.originalName || ''), storedFile: extension ? `inbox/${sourceFileName(localJobId, request.originalName, extension)}` : null }
+    })
+    return output(localJobId)
+  }
+
+  if (!validJobId(request.jobId)) fail('localJobId（jobId）无效。')
+  const localJobId = request.jobId
 
   if (action === 'queue') {
-    const extension = String(request.extension || '').toLowerCase().replace(/^\./, '')
+    const extension = extensionOf(request.extension)
     if (!allowedExtensions.has(extension)) fail('只支持 PDF 或 EPUB。')
-    fm.createDirectory(inbox, true); fm.createDirectory(jobs, true)
-    const file = fm.joinPath(inbox, `${request.jobId}.${extension}`)
-    if (!fm.fileExists(file)) fail(`未找到输入文件：${request.jobId}.${extension}`)
+    const job = await readJob(fm, jobs, localJobId)
+    const file = inputFile(fm, inbox, localJobId, job, extension)
+    if (!fm.fileExists(file)) fail(`未找到输入文件：${localJobId}-<原文件名>.${extension}`)
     await fm.downloadFileFromiCloud(file)
-    const job = fm.joinPath(jobs, `${request.jobId}.json`)
-    fm.writeString(job, JSON.stringify({ state: 'queued', message: '已由 iPhone 入队，等待 Mac。', updatedAt: new Date().toISOString() }, null, 2))
-    return output({ jobId: request.jobId, state: 'queued' })
+    writeJob(fm, jobs, localJobId, {
+      state: 'queued', message: '已由 iPhone 入队，等待 Mac。', source: { extension, storedFile: `inbox/${file.split('/').pop()}` },
+      mac: { state: 'queued', message: '已由 iPhone 入队，等待 Mac。', updatedAt: new Date().toISOString() }
+    })
+    return output('queued')
   }
 
   if (action === 'web-submit') {
-    const extension = String(request.extension || '').toLowerCase().replace(/^\./, '')
+    const extension = extensionOf(request.extension)
     if (!allowedExtensions.has(extension)) fail('只支持 PDF 或 EPUB。')
-    const file = fm.joinPath(inbox, `${request.jobId}.${extension}`)
-    if (!fm.fileExists(file)) fail(`未找到输入文件：${request.jobId}.${extension}`)
+    const job = await readJob(fm, jobs, localJobId)
+    const file = inputFile(fm, inbox, localJobId, job, extension)
+    if (!fm.fileExists(file)) fail(`未找到输入文件：${localJobId}-<原文件名>.${extension}`)
     await fm.downloadFileFromiCloud(file)
-    const requestUrl = apiUrl(`/jobs?jobId=${encodeURIComponent(request.jobId)}&extension=${extension}`)
-    const webRequest = new Request(requestUrl)
+    const storedFile = `inbox/${file.split('/').pop()}`
+    writeJob(fm, jobs, localJobId, { state: 'uploading', message: '正在上传到云端。', source: { extension, storedFile }, web: { state: 'uploading' } })
+    const originalName = (job.source && job.source.originalName) || file.split('/').pop().slice(`${localJobId}-`.length)
+    const webRequest = new Request(apiUrl(`/jobs?jobId=${encodeURIComponent(localJobId)}&extension=${extension}&originalName=${encodeURIComponent(originalName)}`))
+    webRequest.timeoutInterval = 180
     webRequest.method = 'POST'
     webRequest.headers = { ...apiHeaders(), 'Content-Type': extension === 'pdf' ? 'application/pdf' : 'application/epub+zip' }
     webRequest.body = fm.read(file)
     const result = await apiJSON(webRequest)
-    return output({ ...result, localJobId: request.jobId, backend: 'web' })
+    const webJobId = typeof result.jobId === 'string' ? result.jobId : null
+    writeJob(fm, jobs, localJobId, {
+      state: result.state || 'failed', message: result.message || '云端提交失败。',
+      web: { jobId: webJobId, state: result.state || 'failed', message: result.message, resultUrl: result.resultUrl || null, errorCode: result.errorCode || null }
+    })
+    // 保持你现有快捷指令兼容：成功时仍输出 webJobId。
+    return output(webJobId && result.state !== 'failed' ? webJobId : 'failed')
   }
 
   if (action === 'web-status') {
-    if (typeof request.webJobId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(request.webJobId)) fail('云端任务 ID 无效。')
-    const webRequest = new Request(apiUrl(`/jobs/${encodeURIComponent(request.webJobId)}`))
+    const job = await readJob(fm, jobs, localJobId)
+    const webJobId = job.web && job.web.jobId
+    if (typeof webJobId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(webJobId)) fail('任务记录中没有有效的云端任务 ID。')
+    const webRequest = new Request(apiUrl(`/jobs/${encodeURIComponent(webJobId)}`))
+    webRequest.timeoutInterval = 60
     webRequest.headers = apiHeaders()
     const result = await apiJSON(webRequest)
-    return output({ ...result, webJobId: request.webJobId, backend: 'web' })
+    writeJob(fm, jobs, localJobId, {
+      state: result.state || 'failed', message: result.message || '云端状态查询失败。',
+      web: { state: result.state || 'failed', message: result.message, resultUrl: result.resultUrl || job.web.resultUrl || null, errorCode: result.errorCode || null, updatedAt: new Date().toISOString() }
+    })
+    return output(result.state || 'failed')
+  }
+
+  if (action === 'web-result-url') {
+    const job = await readJob(fm, jobs, localJobId)
+    const webJobId = job.web && job.web.jobId
+    if (typeof webJobId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(webJobId)) fail('任务记录中没有有效的云端任务 ID。')
+    const resultUrl = (job.web && job.web.resultUrl) || apiUrl(`/jobs/${encodeURIComponent(webJobId)}/result`)
+    writeJob(fm, jobs, localJobId, { web: { resultUrl } })
+    return output(resultUrl)
+  }
+
+  // 供快捷指令沿用“拼接 URL → 获取 URL 内容 → 解析 state”的流程时回写状态。
+  if (action === 'record-web-state') {
+    const state = String(request.state || '').trim()
+    if (!state) fail('缺少云端状态。')
+    writeJob(fm, jobs, localJobId, {
+      state,
+      message: String(request.message || `云端状态：${state}`),
+      web: { state, ...(typeof request.resultUrl === 'string' ? { resultUrl: request.resultUrl } : {}) }
+    })
+    return output(state)
+  }
+
+  if (action === 'mark-result') {
+    const job = await readJob(fm, jobs, localJobId)
+    const fileName = String(request.fileName || resultFileName(localJobId, job.source && job.source.originalName))
+    writeJob(fm, jobs, localJobId, { state: 'succeeded', message: '结果已保存到 iCloud Drive。', result: `results/${fileName}`, web: { state: 'succeeded' } })
+    return output(`results/${fileName}`)
+  }
+
+  if (action === 'result-file-name') {
+    const job = await readJob(fm, jobs, localJobId)
+    return output(resultFileName(localJobId, job.source && job.source.originalName))
   }
 
   if (action === 'web-cancel') {
-    if (typeof request.webJobId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(request.webJobId)) fail('云端任务 ID 无效。')
-    const webRequest = new Request(apiUrl(`/jobs/${encodeURIComponent(request.webJobId)}`))
+    const job = await readJob(fm, jobs, localJobId)
+    const webJobId = job.web && job.web.jobId
+    if (typeof webJobId !== 'string' || !/^[A-Za-z0-9_-]{8,100}$/.test(webJobId)) fail('任务记录中没有有效的云端任务 ID。')
+    const webRequest = new Request(apiUrl(`/jobs/${encodeURIComponent(webJobId)}`))
     webRequest.method = 'DELETE'; webRequest.headers = apiHeaders()
-    return output(await apiJSON(webRequest))
+    const result = await apiJSON(webRequest)
+    writeJob(fm, jobs, localJobId, { state: result.state || 'cancelled', message: result.message || '云端任务已取消。', web: { state: result.state || 'cancelled' } })
+    return output(result.state || 'cancelled')
   }
 
-  if (action === 'status') {
-    const job = fm.joinPath(jobs, `${request.jobId}.json`)
-    if (!fm.fileExists(job)) fail('未找到任务状态文件。')
-    await fm.downloadFileFromiCloud(job)
-    return output({ jobId: request.jobId, ...JSON.parse(fm.readString(job)) })
-  }
+  if (action === 'status') return output(JSON.stringify(await readJob(fm, jobs, localJobId)))
   fail('未知操作。')
 }
 
