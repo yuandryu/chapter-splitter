@@ -8,13 +8,14 @@
 node bin/chapter-split "/path/to/book.pdf" --out "/path/to/book-chapters"
 node bin/chapter-split "/path/to/book.epub" --out "/path/to/book-chapters"
 node bin/chapter-split "/path/to/book.pdf" --out "/path/to/book-chapters" --level 2
+node bin/chapter-split "/path/to/book.pdf" --out "/path/to/book-chapters" --job-id "job-example-1234"
 ```
 
 PDF 优先读取书签，书签指向的是真实物理页，因此目录印刷页码和文件页码不一致不会造成偏移。没有书签时识别正文可提取文字中的 `第 X 章`、`Chapter X` 与 `Part X`，并标为中等置信度。无文字层的扫描 PDF 会报错而不会猜测。
 
 EPUB 优先使用 EPUB 3 `nav.xhtml` 或 EPUB 2 `toc.ncx`；没有导航时按 OPF `spine` 切分。输出会保留图片、字体和 CSS，并将阅读顺序收窄到相应章节。
 
-每个输出文件均按 `序号-识别到的章节标题.扩展名` 命名，例如 `001-Chapter 1- Getting Started.pdf`。不适用于文件名的字符会替换为 `-`；章节序号始终保留，因而同名章节也不会互相覆盖。
+普通命令行使用时，每个输出文件按 `序号-识别到的章节标题.扩展名` 命名，例如 `001-Chapter 1- Getting Started.pdf`。传入 `--job-id` 后，文件名为 `序号-localJobId-识别到的章节标题.扩展名`，例如 `001-job-example-1234-Chapter 1- Getting Started.pdf`。不适用于文件名的字符会替换为 `-`；章节序号始终保留，因而同名章节也不会互相覆盖。
 
 输出目录必须为空或不存在，避免覆盖已有文件。验证命令：`node --test test/*.test.js`。
 
