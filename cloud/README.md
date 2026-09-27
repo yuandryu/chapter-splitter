@@ -1,4 +1,6 @@
-# Render Free 云端 API
+# 旧版 Scriptable 直传 API（已弃用）
+
+> 云端主路径现已统一改为网页上传 + R2 分片存储。请使用 [`WEB_UPLOAD.md`](./WEB_UPLOAD.md) 部署和操作；本文件保留仅供旧版快捷指令/Mac 兜底排查。
 
 这一目录提供快捷指令所需的云端主处理 API。Render Free 支持 Python Web Service，但免费实例空闲 15 分钟会休眠，且本地文件系统会在重启/休眠/重新部署时丢失；本实现只把任务和 ZIP 保存在当前实例内存/临时目录中，适合个人、短任务测试，不适合长期生产存储。[Render Free 限制](https://render.com/docs/free)
 

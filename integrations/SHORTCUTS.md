@@ -1,4 +1,6 @@
-# iPhone/iPad 快捷指令：云端优先，Mac 兜底
+# iPhone/iPad 快捷指令：Mac 兜底
+
+> 云端上传现已统一从网页完成，不再通过快捷指令或 Scriptable 上传原文件。请先阅读 [`../cloud/WEB_UPLOAD.md`](../cloud/WEB_UPLOAD.md)。本文件中的 `web-submit`、`web-status` 与 ZIP 下载流程只保留为旧版参考；快捷指令的现行云端动作仅需“打开 URL”到网页首页。
 
 ```text
 快捷指令 → Scriptable 将原文件放入 iCloud inbox

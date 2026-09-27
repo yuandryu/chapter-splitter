@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter Splitter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Chapter Splitter</h1>
+    <p class="intro">在浏览器中上传 PDF 或 EPUB。PDF 没有可用目录时，可按 <strong>实际 PDF 页序</strong> 手动定义章节。</p>
+    <section id="upload-card" class="card">
+      <label>API Token（首次使用时填写）<input id="api-token" type="password" autocomplete="off" placeholder="Render 的 API_TOKEN"></label>
+      <label class="file-picker">选择 PDF 或 EPUB<input id="file" type="file" accept=".pdf,.epub,application/pdf,application/epub+zip"></label>
+      <p id="file-name" class="muted">尚未选择文件</p>
+      <button id="upload" disabled>上传并分析</button>
+      <progress id="progress" max="100" value="0" hidden></progress>
+      <p id="status" role="status"></p>
+    </section>
+    <section id="chapters-card" class="card" hidden>
+      <h2>章节设置</h2>
+      <p id="analysis-message"></p>
+      <p id="page-count" class="muted"></p>
+      <div id="chapter-list"></div>
+      <button id="add-chapter" class="secondary">添加章节</button>
+      <button id="save-chapters">保存手动章节</button>
+      <button id="process">开始切割</button>
+    </section>
+    <section id="result-card" class="card" hidden>
+      <h2>任务状态</h2>
+      <p id="job-status"></p>
+      <a id="download" hidden>下载 ZIP</a>
+    </section>
+  </main>
+  <template id="chapter-row">
+    <div class="chapter-row">
+      <input class="chapter-title" placeholder="章节名称" aria-label="章节名称">
+      <input class="chapter-page" type="number" min="1" step="1" placeholder="起始实际页" aria-label="起始实际页">
+      <button class="remove" type="button" aria-label="删除章节">删除</button>
+    </div>
+  </template>
+  <script src="app.js"></script>
+</body>
+</html>

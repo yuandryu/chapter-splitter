@@ -21,7 +21,7 @@ EPUB 优先使用 EPUB 3 `nav.xhtml` 或 EPUB 2 `toc.ncx`；没有导航时按 O
 
 ## 快捷指令与云端主处理
 
-快捷指令集成和 Scriptable 脚本位于 [`integrations/`](./integrations/)。云端 API 的 Render Free 部署文件与说明位于 [`cloud/`](./cloud/)。云端失败后会保留 iCloud `inbox` 中的原文件，并询问是否通过 SSH 切换到 Mac 后端。
+快捷指令集成和 Scriptable 脚本位于 [`integrations/`](./integrations/)。云端主入口为网页上传：浏览器将 PDF/EPUB 直传 R2，再由 Render 处理；PDF 没有可用目录时可填写章节名称和实际 PDF 起始页。部署与快捷指令调整见 [`cloud/WEB_UPLOAD.md`](./cloud/WEB_UPLOAD.md)。云端失败后仍可使用 iCloud `inbox` 和 SSH 切换到 Mac 后端。
 
 ## iPhone/iPad 快捷指令入口
 
