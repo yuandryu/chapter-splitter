@@ -37,8 +37,14 @@ def auth(request: Request):
 
 
 def safe_name(value):
-    value = re.sub(r'[\\/:*?"<>|]+', "-", value).strip()[:100]
+    value = re.sub(r'[\\/:*?"<>|]+', "-", value)
+    value = re.sub(r"\s+", " ", value).strip()[:100]
     return value or "Untitled chapter"
+
+
+def archive_name(client_job_id, original_name):
+    original_stem = Path(original_name or "book").name.rsplit(".", 1)[0]
+    return f"{client_job_id}-{safe_name(original_stem)}-chapters.zip"
 
 
 def chapter_title(line):
@@ -50,7 +56,7 @@ def chapter_title(line):
     return line
 
 
-def pdf_chapters(source, output):
+def pdf_chapters(source, output, client_job_id):
     document = fitz.open(source)
     starts = []
     toc = document.get_toc(simple=False) or []
@@ -76,7 +82,7 @@ def pdf_chapters(source, output):
         end = (unique[index + 1]["start_page"] - 2) if index + 1 < len(unique) else document.page_count - 1
         piece = fitz.open()
         piece.insert_pdf(document, from_page=start, to_page=end)
-        filename = f"{index + 1:03d}-{safe_name(item['title'])}.pdf"
+        filename = f"{index + 1:03d}-{client_job_id}-{safe_name(item['title'])}.pdf"
         piece.save(str(output / filename), garbage=4, deflate=True)
         try:
             label = document[start].get_label() or str(item["start_page"])
@@ -96,7 +102,7 @@ def norm_href(base, href):
     return posixpath.normpath(posixpath.join(posixpath.dirname(base), unquote(href.split("#", 1)[0]))).lstrip("./")
 
 
-def epub_chapters(source, output):
+def epub_chapters(source, output, client_job_id):
     stage = Path(tempfile.mkdtemp(prefix="chapter-split-epub-"))
     try:
         with zipfile.ZipFile(source) as archive:
@@ -153,7 +159,7 @@ def epub_chapters(source, output):
             for item_id in spine[item["index"]:end]:
                 chapter_spine.append(ET.Element("itemref", {"idref": item_id}))
             chapter_tree.write(opf_path, encoding="utf-8", xml_declaration=True)
-            filename = f"{index + 1:03d}-{safe_name(item['title'])}.epub"
+            filename = f"{index + 1:03d}-{client_job_id}-{safe_name(item['title'])}.epub"
             with zipfile.ZipFile(output / filename, "w", zipfile.ZIP_DEFLATED) as archive:
                 mimetype = stage / "mimetype"
                 if mimetype.exists():
@@ -173,7 +179,9 @@ def process_job(web_id, input_path, extension, job_dir):
         now_state(web_id, state="processing", message="正在识别章节并切分文件。", progress=0.1)
         output = Path(job_dir) / "result"
         output.mkdir()
-        chapters = pdf_chapters(input_path, output) if extension == "pdf" else epub_chapters(input_path, output)
+        job = JOBS[web_id]
+        client_job_id = job["clientJobId"] or web_id
+        chapters = pdf_chapters(input_path, output, client_job_id) if extension == "pdf" else epub_chapters(input_path, output, client_job_id)
         manifest = {"format": extension, "chapters": chapters}
         (output / "chapters.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         archive = Path(job_dir) / f"{web_id}.zip"
@@ -181,7 +189,7 @@ def process_job(web_id, input_path, extension, job_dir):
             for path in output.rglob("*"):
                 if path.is_file():
                     target.write(path, path.relative_to(output).as_posix())
-        now_state(web_id, state="succeeded", progress=1, message="处理完成。", resultUrl=f"/api/jobs/{web_id}/result", archive=str(archive))
+        now_state(web_id, state="succeeded", progress=1, message="处理完成。", resultUrl=f"/api/jobs/{web_id}/result", archive=str(archive), archiveName=archive_name(client_job_id, job.get("originalName")))
     except Exception as error:
         now_state(web_id, state="failed", progress=1, errorCode="PROCESSING_FAILED", message=str(error), fallbackAvailable=True)
 
@@ -202,11 +210,15 @@ async def create_job(request: Request):
     body = await request.body()
     if len(body) > MAX_UPLOAD_BYTES:
         return JSONResponse({"state": "failed", "errorCode": "FILE_TOO_LARGE", "message": "文件超过云端免费额度限制。", "fallbackAvailable": True}, status_code=413)
+    client_job_id = request.query_params.get("jobId", "").strip()
+    if client_job_id and not re.fullmatch(r"[A-Za-z0-9_-]{12,80}", client_job_id):
+        return JSONResponse({"state": "failed", "errorCode": "INVALID_CLIENT_JOB_ID", "message": "本地任务 ID 无效。", "fallbackAvailable": True}, status_code=400)
+    original_name = Path(request.query_params.get("originalName", "")).name
     web_id = f"web-{uuid.uuid4().hex}"
     job_dir = Path(tempfile.mkdtemp(prefix=f"{web_id}-"))
     input_path = job_dir / f"input.{extension}"
     input_path.write_bytes(body)
-    JOBS[web_id] = {"jobId": web_id, "state": "queued", "message": "云端任务已创建。", "fallbackAvailable": True, "updatedAt": ""}
+    JOBS[web_id] = {"jobId": web_id, "clientJobId": client_job_id or None, "originalName": original_name or None, "state": "queued", "message": "云端任务已创建。", "fallbackAvailable": True, "updatedAt": ""}
     threading.Thread(target=process_job, args=(web_id, input_path, extension, job_dir), daemon=True).start()
     return {**JOBS[web_id], "jobId": web_id}
 
@@ -230,7 +242,7 @@ async def get_result(web_id: str, request: Request):
     job = JOBS.get(web_id)
     if not job or job.get("state") != "succeeded" or not Path(job.get("archive", "")).is_file():
         return JSONResponse({"state": "failed", "errorCode": "NOT_READY", "message": "结果尚未准备好。"}, status_code=409)
-    return FileResponse(job["archive"], media_type="application/zip", filename=f"{web_id}.zip")
+    return FileResponse(job["archive"], media_type="application/zip", filename=job.get("archiveName") or f"{web_id}.zip")
 
 
 @app.delete("/api/jobs/{web_id}")
